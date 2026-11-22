@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import TradingPage from './pages/TradingPage';
+import OptionChainPage from './pages/OptionChainPage';
 import RiskCalculatorPage from './pages/RiskCalculatorPage';
 import StrategyBuilderPage from './pages/StrategyBuilderPage';
 import JournalPage from './pages/JournalPage';
@@ -28,6 +29,8 @@ export default function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="trading" element={<TradingPage />} />
+        <Route path="option-chain" element={<OptionChainPage />} />
+
         <Route path="risk-calculator" element={<RiskCalculatorPage />} />
         <Route path="strategy" element={<StrategyBuilderPage />} />
         <Route path="journal" element={<JournalPage />} />

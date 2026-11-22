@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import { api, errorMessage } from '../api/client';
 import { MetricCard, formatMoney } from '../components/common';
+import LineChart from '../components/LineChart';
 
 const TABS = ['Margins', 'Positions', 'Orders'];
 
@@ -95,6 +96,41 @@ function qtyCell(quantity) {
   return <span style={{ color, fontWeight: 600 }}>{quantity}</span>;
 }
 
+// "NIFTY26NOV22000CE" -> { strike: 22000, type: 'CE' }; futures/equity -> null.
+function parseOption(tradingsymbol) {
+  const m = /(\d+(?:\.\d+)?)(CE|PE)$/.exec((tradingsymbol || '').toUpperCase());
+  return m ? { strike: Number(m[1]), type: m[2] } : null;
+}
+
+// P&L at expiry across all legs of a group, sampled over a price range around the strikes.
+// Options use intrinsic value minus the average premium; futures/equity are linear.
+function payoffCurve(positions) {
+  const legs = positions
+    .map((p) => ({ qty: Number(p.quantity), avg: Number(p.average_price || 0), opt: parseOption(p.tradingsymbol) }))
+    .filter((l) => l.qty !== 0);
+  const anchors = legs.filter((l) => l.opt).map((l) => l.opt.strike);
+  if (anchors.length === 0) return [];
+
+  const lo = Math.min(...anchors) * 0.8;
+  const hi = Math.max(...anchors) * 1.2;
+  const steps = 60;
+  const points = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const x = lo + ((hi - lo) * i) / steps;
+    let pnl = 0;
+    for (const l of legs) {
+      if (l.opt) {
+        const intrinsic = l.opt.type === 'CE' ? Math.max(x - l.opt.strike, 0) : Math.max(l.opt.strike - x, 0);
+        pnl += l.qty * (intrinsic - l.avg);
+      } else {
+        pnl += l.qty * (x - l.avg);
+      }
+    }
+    points.push({ x: Math.round(x), y: Math.round(pnl) });
+  }
+  return points;
+}
+
 function PositionsView({ data }) {
   if (!data) return <Typography color="text.secondary">Loading…</Typography>;
   const rows = data.net || [];
@@ -140,6 +176,12 @@ function PositionsView({ data }) {
                 p.average_price, p.last_price, formatMoney(p.pnl),
               ])}
             />
+            {payoffCurve(g.positions).length > 0 && (
+              <>
+                <Typography variant="subtitle2" sx={{ mt: 2 }}>Payoff at expiry</Typography>
+                <LineChart points={payoffCurve(g.positions)} xLabel="Underlying price" yLabel="P&L" />
+              </>
+            )}
           </CardContent>
         </Card>
       ))}

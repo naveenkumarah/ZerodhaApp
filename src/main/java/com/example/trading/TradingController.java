@@ -45,6 +45,13 @@ public class TradingController {
         return trading.ltp(userId, instruments);
     }
 
+    @GetMapping("/option-chain")
+    public Map<String, Object> optionChain(@AuthenticationPrincipal Long userId,
+                                           @RequestParam String underlying,
+                                           @RequestParam(required = false) String expiry) {
+        return trading.optionChain(userId, underlying, expiry);
+    }
+
     @PostMapping("/order")
     public Map<String, Object> placeOrder(@AuthenticationPrincipal Long userId,
                                           @Valid @RequestBody TradingService.PlaceOrderRequest req) {

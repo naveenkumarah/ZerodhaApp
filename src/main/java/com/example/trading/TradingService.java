@@ -19,9 +19,15 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -190,6 +196,151 @@ public class TradingService {
 
     public void cancelOrder(Long userId, String variety, String orderId) {
         kite.cancelOrder(accessToken(userId), variety, orderId);
+    }
+
+    /** One F&O contract from the NFO instrument master. */
+    public record Contract(String tradingsymbol, String name, LocalDate expiry, BigDecimal strike,
+                           String type, int lotSize) {}
+
+    private static final Map<String, String> SPOT_SYMBOL = Map.of(
+            "NIFTY", "NIFTY 50", "BANKNIFTY", "NIFTY BANK",
+            "FINNIFTY", "NIFTY FIN SERVICE", "MIDCPNIFTY", "NIFTY MID SELECT");
+    private static final int STRIKES_EACH_SIDE = 10;
+
+    // The NFO instrument CSV is large, so it is parsed once and reused for an hour.
+    private volatile List<Contract> nfoCache = List.of();
+    private volatile Instant nfoCachedAt = Instant.EPOCH;
+
+    /**
+     * Option chain for an index or stock: the nearest (or requested) expiry, and the strikes within
+     * {@value #STRIKES_EACH_SIDE} of the ATM strike, each with CE and PE LTP, OI and volume.
+     */
+    public Map<String, Object> optionChain(Long userId, String underlying, String expiryParam) {
+        String token = accessToken(userId);
+        String name = underlying.trim().toUpperCase(Locale.ROOT);
+        List<Contract> contracts = nfoContracts(token).stream().filter(c -> c.name().equals(name)).toList();
+        if (contracts.isEmpty()) {
+            throw new BusinessRuleException("No F&O contracts found for " + name);
+        }
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+        List<LocalDate> expiries = contracts.stream().map(Contract::expiry)
+                .filter(d -> !d.isBefore(today)).distinct().sorted().toList();
+        if (expiries.isEmpty()) {
+            throw new BusinessRuleException("No unexpired contracts for " + name);
+        }
+        LocalDate expiry = (expiryParam == null || expiryParam.isBlank())
+                ? expiries.get(0) : LocalDate.parse(expiryParam);
+        if (!expiries.contains(expiry)) {
+            throw new BusinessRuleException("Expiry " + expiry + " is not available for " + name);
+        }
+        List<Contract> chain = contracts.stream().filter(c -> c.expiry().equals(expiry)).toList();
+
+        String spotKey = "NSE:" + SPOT_SYMBOL.getOrDefault(name, name);
+        double spot = kite.quote(token, List.of(spotKey)).path(spotKey).path("last_price").asDouble(0);
+
+        List<BigDecimal> strikes = chain.stream().map(Contract::strike).distinct().sorted().toList();
+        int atm = 0;
+        for (int i = 1; i < strikes.size(); i++) {
+            if (Math.abs(strikes.get(i).doubleValue() - spot) < Math.abs(strikes.get(atm).doubleValue() - spot)) {
+                atm = i;
+            }
+        }
+        int from = Math.max(0, atm - STRIKES_EACH_SIDE);
+        int to = Math.min(strikes.size(), atm + STRIKES_EACH_SIDE + 1);
+        List<BigDecimal> window = strikes.subList(from, to);
+
+        Map<BigDecimal, Map<String, Contract>> byStrike = new HashMap<>();
+        for (Contract c : chain) {
+            if (window.contains(c.strike())) {
+                byStrike.computeIfAbsent(c.strike(), k -> new HashMap<>()).put(c.type(), c);
+            }
+        }
+        List<String> keys = byStrike.values().stream().flatMap(m -> m.values().stream())
+                .map(c -> "NFO:" + c.tradingsymbol()).toList();
+        JsonNode quotes = kite.quote(token, keys);
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        BigDecimal atmStrike = strikes.get(atm);
+        for (BigDecimal strike : window) {
+            Map<String, Contract> legs = byStrike.getOrDefault(strike, Map.of());
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("strike", strike);
+            row.put("atm", strike.compareTo(atmStrike) == 0);
+            row.put("ce", leg(legs.get("CE"), quotes));
+            row.put("pe", leg(legs.get("PE"), quotes));
+            rows.add(row);
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("underlying", name);
+        out.put("spot", spot);
+        out.put("expiry", expiry.toString());
+        out.put("expiries", expiries.stream().map(LocalDate::toString).toList());
+        out.put("lotSize", chain.get(0).lotSize());
+        out.put("atmStrike", atmStrike);
+        out.put("rows", rows);
+        return out;
+    }
+
+    private Map<String, Object> leg(Contract c, JsonNode quotes) {
+        if (c == null) {
+            return null;
+        }
+        JsonNode q = quotes.path("NFO:" + c.tradingsymbol());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("tradingsymbol", c.tradingsymbol());
+        out.put("ltp", q.path("last_price").asDouble(0));
+        out.put("oi", q.path("oi").asLong(0));
+        out.put("volume", q.path("volume").asLong(0));
+        return out;
+    }
+
+    private List<Contract> nfoContracts(String token) {
+        if (!nfoCache.isEmpty() && Instant.now().isBefore(nfoCachedAt.plus(Duration.ofHours(1)))) {
+            return nfoCache;
+        }
+        List<Contract> parsed = parseContracts(kite.instruments(token, "NFO"));
+        nfoCache = parsed;
+        nfoCachedAt = Instant.now();
+        return parsed;
+    }
+
+    static List<Contract> parseContracts(String csv) {
+        if (csv == null || csv.isBlank()) {
+            return List.of();
+        }
+        String[] lines = csv.split("\\r?\\n");
+        Map<String, Integer> col = new HashMap<>();
+        String[] header = lines[0].split(",");
+        for (int i = 0; i < header.length; i++) {
+            col.put(header[i].trim(), i);
+        }
+        int iSymbol = col.get("tradingsymbol");
+        int iName = col.get("name");
+        int iExpiry = col.get("expiry");
+        int iStrike = col.get("strike");
+        int iLot = col.get("lot_size");
+        int iType = col.get("instrument_type");
+
+        List<Contract> out = new ArrayList<>();
+        for (int r = 1; r < lines.length; r++) {
+            String[] f = lines[r].split(",", -1);
+            if (f.length <= iType) {
+                continue;
+            }
+            String type = f[iType].trim();
+            if ((!"CE".equals(type) && !"PE".equals(type)) || f[iExpiry].isBlank()) {
+                continue;
+            }
+            out.add(new Contract(
+                    f[iSymbol].trim(),
+                    f[iName].replace("\"", "").trim(),
+                    LocalDate.parse(f[iExpiry].trim()),
+                    new BigDecimal(f[iStrike].trim()).stripTrailingZeros(),
+                    type,
+                    Integer.parseInt(f[iLot].trim())));
+        }
+        return out;
     }
 
     private Map<String, String> orderParams(PlaceOrderRequest req) {

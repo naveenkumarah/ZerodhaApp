@@ -14,6 +14,8 @@ const DRAWER_WIDTH = 220;
 const NAV = [
   { label: 'Dashboard', to: '/' },
   { label: 'Trading', to: '/trading' },
+  { label: 'Option Chain', to: '/option-chain' },
+
   { label: 'Risk Calculator', to: '/risk-calculator' },
   { label: 'Strategy Builder', to: '/strategy' },
   { label: 'Trading Journal', to: '/journal' },

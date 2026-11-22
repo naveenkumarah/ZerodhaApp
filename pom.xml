@@ -74,6 +74,11 @@
             <artifactId>flyway-mysql</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.zerodhatech.kiteconnect</groupId>
+            <artifactId>kiteconnect</artifactId>
+            <version>4.0.1</version>
+        </dependency>
+        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>

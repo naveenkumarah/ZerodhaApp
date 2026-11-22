@@ -19,6 +19,13 @@ public interface KiteGateway {
 
     JsonNode ltp(String accessToken, List<String> instruments);
 
+    /** Full quote (last price, OI, volume) keyed by "EXCHANGE:TRADINGSYMBOL". */
+    JsonNode quote(String accessToken, List<String> instruments);
+
+    /** Instrument master for an exchange as CSV (GET /instruments/{exchange}). */
+    String instruments(String accessToken, String exchange);
+
+
     String placeOrder(String accessToken, String variety, Map<String, String> params);
 
     void modifyOrder(String accessToken, String variety, String orderId, Map<String, String> params);
