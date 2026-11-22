@@ -1,0 +1,45 @@
+spring:
+  config:
+    import: optional:file:./.env[.properties]
+  application:
+    name: tradediscipline-pro
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/tradediscipline?serverTimezone=UTC&characterEncoding=utf8}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+
+server:
+  port: ${PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+app:
+  security:
+    jwt-secret: ${JWT_SECRET:}                  # min 32 bytes, set in .env
+    jwt-expiration-minutes: 60
+  crypto:
+    token-key: ${TOKEN_ENCRYPTION_KEY:}   # base64-encoded 256-bit AES key
+  kite:
+    api-key: ${KITE_API_KEY:}
+    api-secret: ${KITE_API_SECRET:}
+    base-url: https://api.kite.trade
+  discipline:
+    max-trades-per-day: 3
+    max-consecutive-losses: 2
+    min-reward-risk: 2
+    revenge-window-minutes: 30
+
