@@ -70,22 +70,80 @@ function MarginsView({ data }) {
   );
 }
 
+// Longer prefixes must come first so GOLDM matches before GOLD, BANKNIFTY before NIFTY.
+const UNDERLYINGS = [
+  'MIDCPNIFTY', 'BANKNIFTY', 'FINNIFTY', 'NIFTY', 'SENSEX', 'BANKEX',
+  'GOLDPETAL', 'GOLDGUINEA', 'GOLDM', 'GOLD',
+  'SILVERMIC', 'SILVERM', 'SILVER',
+  'CRUDEOILM', 'CRUDEOIL', 'NATURALGAS', 'COPPER', 'ZINC', 'ALUMINIUM', 'LEAD', 'NICKEL',
+];
+
+// "NIFTY26NOV22000CE" -> "NIFTY", "GOLD26DECFUT" -> "GOLD", "RELIANCE" -> "RELIANCE".
+// A known underlying must be followed by a digit, so NIFTYBEES stays its own symbol.
+function underlyingOf(tradingsymbol) {
+  const sym = (tradingsymbol || '').toUpperCase();
+  for (const u of UNDERLYINGS) {
+    if (sym.startsWith(u) && /\d/.test(sym.charAt(u.length))) return u;
+  }
+  return sym;
+}
+
+// Short positions (negative qty) in red, long positions (positive qty) in blue.
+function qtyCell(quantity) {
+  const n = Number(quantity);
+  const color = n < 0 ? '#d32f2f' : n > 0 ? '#1565c0' : undefined;
+  return <span style={{ color, fontWeight: 600 }}>{quantity}</span>;
+}
+
 function PositionsView({ data }) {
   if (!data) return <Typography color="text.secondary">Loading…</Typography>;
   const rows = data.net || [];
+  if (rows.length === 0) {
+    return (
+      <Card variant="outlined">
+        <CardContent>
+          <Typography color="text.secondary">No open positions</Typography>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Group by underlying (NIFTY, BANKNIFTY, GOLD, ...). Each group's P&L is the sum of its legs.
+  const groups = new Map();
+  for (const p of rows) {
+    const key = underlyingOf(p.tradingsymbol);
+    if (!groups.has(key)) groups.set(key, { symbol: key, pnl: 0, positions: [] });
+    const group = groups.get(key);
+    group.pnl += Number(p.pnl || 0);
+    group.positions.push(p);
+  }
+  const totalPnl = rows.reduce((sum, p) => sum + Number(p.pnl || 0), 0);
+  const pnlColor = (v) => (v < 0 ? 'error.main' : 'success.main');
+
   return (
-    <Card variant="outlined">
-      <CardContent>
-        <SimpleTable
-          empty="No open positions"
-          columns={['Symbol', 'Exchange', 'Product', 'Qty', 'Avg price', 'Last price', 'P&L']}
-          rows={rows.map((p) => [
-            p.tradingsymbol, p.exchange, p.product, p.quantity,
-            p.average_price, p.last_price, formatMoney(p.pnl),
-          ])}
-        />
-      </CardContent>
-    </Card>
+    <Stack spacing={2}>
+      <MetricCard label="Total P&L" value={formatMoney(totalPnl)} color={pnlColor(totalPnl)} />
+      {[...groups.values()].map((g) => (
+        <Card variant="outlined" key={g.symbol}>
+          <CardContent>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+              <Typography variant="h6">{g.symbol}</Typography>
+              <Typography variant="h6" sx={{ color: pnlColor(g.pnl), fontWeight: 600 }}>
+                {formatMoney(g.pnl)}
+              </Typography>
+            </Stack>
+            <SimpleTable
+              empty="No open positions"
+              columns={['Exchange', 'Instrument', 'Product', 'Qty', 'Avg price', 'Last price', 'P&L']}
+              rows={g.positions.map((p) => [
+                p.exchange, p.tradingsymbol, p.product, qtyCell(p.quantity),
+                p.average_price, p.last_price, formatMoney(p.pnl),
+              ])}
+            />
+          </CardContent>
+        </Card>
+      ))}
+    </Stack>
   );
 }
 
